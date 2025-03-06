@@ -14,6 +14,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.springframework.security.config.Customizer.withDefaults;
+
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
@@ -23,6 +25,10 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+            // 明确禁用表单登录
+            .formLogin(form -> form.disable())
+            // 禁用 HTTP Basic 认证
+            .httpBasic(basic -> basic.disable())
             .authorizeHttpRequests(auth -> auth
                 .anyRequest().permitAll() // 开发阶段允许所有请求，后期可调整为需要认证
             );
