@@ -1,0 +1,15 @@
+{
+  "extEnable": true,
+  "extAppid": "wx86e5444105ae3e18",
+  "ext": {
+    "apiurl": "",   
+    "appid": "201",
+    "appkey": "523ed4437af2a16c6a51d94507088120",
+    "skin": "skin1"
+  },
+  "extPages": {},
+  "networkTimeout": {
+    "request": 10000,
+    "downloadFile": 10000
+  }
+}
