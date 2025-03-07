@@ -1,5 +1,6 @@
 package com.example.roombooking.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.util.Set;
@@ -34,5 +35,6 @@ public class User {
     private Role role;
     
     @OneToMany(mappedBy = "user")
+    @JsonBackReference
     private Set<Booking> bookings;
 }

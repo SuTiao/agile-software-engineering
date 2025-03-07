@@ -1,5 +1,6 @@
 package com.example.roombooking.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.Data;
 
@@ -14,8 +15,14 @@ public class RoomEquipment {
     
     @ManyToOne
     @JoinColumn(name = "room_id")
+    @JsonBackReference("room-equipment")
     private Room room;
     
     @Column(name = "equipment_name")
-    private String equipmentName;
+    private String name;
+    
+    private String description;
+    
+    @Column(name = "is_available")
+    private Boolean isAvailable;
 }
