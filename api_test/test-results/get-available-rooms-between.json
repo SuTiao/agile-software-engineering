@@ -1,0 +1,1 @@
+[{"id":1,"name":"Room A","capacity":20,"location":"Building 1, Floor 2","available":true,"restricted":false},{"id":2,"name":"Room B","capacity":50,"location":"Building 2, Floor 1","available":true,"restricted":false},{"id":3,"name":"Room 634","capacity":30,"location":"Building 1, Floor 3","available":true,"restricted":false}]

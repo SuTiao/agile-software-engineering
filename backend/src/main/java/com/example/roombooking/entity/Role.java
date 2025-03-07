@@ -1,7 +1,6 @@
 package com.example.roombooking.entity;
 
-import com.fasterxml.jackson.annotation.JsonBackReference;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.util.Set;
@@ -9,7 +8,6 @@ import java.util.Set;
 @Entity
 @Table(name = "roles")
 @Data
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Role {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,10 +23,10 @@ public class Role {
         joinColumns = @JoinColumn(name = "role_id"),
         inverseJoinColumns = @JoinColumn(name = "permission_id")
     )
-    @JsonIgnoreProperties("roles")
+    @JsonIgnore // 添加这行解决循环引用问题
     private Set<Permission> permissions;
     
     @OneToMany(mappedBy = "role")
-    @JsonBackReference
+    @JsonIgnore
     private Set<User> users;
 }

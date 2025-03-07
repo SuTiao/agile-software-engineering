@@ -1,6 +1,6 @@
 package com.example.roombooking.entity;
 
-import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -16,7 +16,7 @@ public class Schedule {
     
     @ManyToOne
     @JoinColumn(name = "room_id")
-    @JsonManagedReference
+    @JsonIgnore
     private Room room;
     
     @Column(name = "start_time")

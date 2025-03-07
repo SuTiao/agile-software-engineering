@@ -1,6 +1,6 @@
 package com.example.roombooking.entity;
 
-import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.util.Set;
@@ -17,6 +17,7 @@ public class User {
     private String username;
     
     @Column(name = "password_hash")
+    @JsonIgnore
     private String passwordHash;
     
     @Column(name = "first_name")
@@ -35,6 +36,6 @@ public class User {
     private Role role;
     
     @OneToMany(mappedBy = "user")
-    @JsonBackReference
+    @JsonIgnore
     private Set<Booking> bookings;
 }

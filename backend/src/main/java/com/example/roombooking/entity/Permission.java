@@ -1,6 +1,6 @@
 package com.example.roombooking.entity;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.util.Set;
@@ -18,6 +18,6 @@ public class Permission {
     private String name;
     
     @ManyToMany(mappedBy = "permissions")
-    @JsonIgnoreProperties("permissions")
+    @JsonIgnore
     private Set<Role> roles;
 }

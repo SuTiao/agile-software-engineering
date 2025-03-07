@@ -1,12 +1,42 @@
-# Room Booking API 测试脚本 - 专为 Clash 代理环境优化
-# 作者：GitHub Copilot
+# Room Booking API 全面测试脚本 - 绕过代理版本
 # 日期：2025年3月7日
 
-# 配置参数
-$baseUrl = "http://localhost:8080/api"  # 使用 127.0.0.1 而非 localhost 以避免可能的 DNS 解析问题
+# 保存原始代理设置
+$originalProxySettings = @{
+    HTTP_PROXY = $env:HTTP_PROXY
+    HTTPS_PROXY = $env:HTTPS_PROXY
+    NO_PROXY = $env:NO_PROXY
+}
+
+# 禁用系统代理
+function Disable-SystemProxy {
+    Write-Host "临时禁用系统代理..." -ForegroundColor Yellow
+    $env:HTTP_PROXY = ""
+    $env:HTTPS_PROXY = ""
+    $env:NO_PROXY = "localhost,127.0.0.1,::1"
+    
+    # 尝试设置 WebRequest 默认代理为空
+    try {
+        [System.Net.WebRequest]::DefaultWebProxy = $null
+    } catch {
+        Write-Host "无法设置 DefaultWebProxy: $_" -ForegroundColor Yellow
+    }
+}
+
+# 恢复原始代理设置
+function Restore-SystemProxy {
+    Write-Host "恢复系统代理设置..." -ForegroundColor Yellow
+    $env:HTTP_PROXY = $originalProxySettings.HTTP_PROXY
+    $env:HTTPS_PROXY = $originalProxySettings.HTTPS_PROXY
+    $env:NO_PROXY = $originalProxySettings.NO_PROXY
+}
+
+# 禁用代理
+Disable-SystemProxy
+
+# API 根路径 (使用IP而非localhost以避免DNS解析问题)
+$baseUrl = "http://127.0.0.1:8080/api"
 $outputFolder = "./test-results"
-$connectionTimeoutSec = 10
-$maxRetries = 3
 
 # 创建输出文件夹
 if (!(Test-Path -Path $outputFolder)) {
@@ -14,365 +44,557 @@ if (!(Test-Path -Path $outputFolder)) {
     Write-Host "创建测试结果目录: $outputFolder" -ForegroundColor Gray
 }
 
-# 代理处理函数 - 专门针对 Clash 配置
-function Set-ProxyBypass {
-    # 保存系统代理设置
-    $originalProxySettings = @{
-        WebProxy = [System.Net.WebRequest]::DefaultWebProxy
-        ProxyEnable = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').ProxyEnable
-        ProxyServer = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings').ProxyServer
-    }
+# 设置TLS安全协议
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12, [Net.SecurityProtocolType]::Tls11, [Net.SecurityProtocolType]::Tls
 
-    try {
-        # 禁用系统级代理
-        [System.Net.WebRequest]::DefaultWebProxy = $null
-        # 设置环境变量绕过代理
-        $Env:NO_PROXY = "localhost,127.0.0.1,::1"
-        $Env:no_proxy = "localhost,127.0.0.1,::1"
-        $Env:HTTP_PROXY = ""
-        $Env:HTTPS_PROXY = ""
-        $Env:http_proxy = ""
-        $Env:https_proxy = ""
-
-        Write-Host "已禁用系统代理并设置本地代理绕过" -ForegroundColor Gray
-        
-        return $originalProxySettings
-    }
-    catch {
-        Write-Host "无法完全禁用代理: $_" -ForegroundColor Yellow
-        return $originalProxySettings
-    }
-}
-
-# 还原代理设置
-function Restore-ProxySettings {
+# TCP连接测试函数
+function Test-TcpConnection {
     param (
-        $OriginalSettings
+        [string]$Uri,
+        [int]$Timeout = 2000
     )
     
-    try {
-        [System.Net.WebRequest]::DefaultWebProxy = $OriginalSettings.WebProxy
-        
-        # 清除代理环境变量
-        Remove-Item Env:NO_PROXY -ErrorAction SilentlyContinue
-        Remove-Item Env:no_proxy -ErrorAction SilentlyContinue
-        Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
-        Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
-        Remove-Item Env:http_proxy -ErrorAction SilentlyContinue
-        Remove-Item Env:https_proxy -ErrorAction SilentlyContinue
-        
-        Write-Host "已还原原始代理设置" -ForegroundColor Gray
-    }
-    catch {
-        Write-Host "还原代理设置失败: $_" -ForegroundColor Yellow
-    }
-}
-
-# 服务器健康检查函数
-function Test-ServerConnection {
-    param (
-        [int]$RetryCount = 0
-    )
+    Write-Host "正在测试与 $Uri 的TCP连接..." -ForegroundColor Yellow
     
     try {
-        $ProgressPreference = 'SilentlyContinue'  # 禁用进度条以提高性能
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $uri = [System.Uri]$Uri
+        $asyncResult = $tcpClient.BeginConnect($uri.Host, $uri.Port, $null, $null)
+        $wait = $asyncResult.AsyncWaitHandle.WaitOne($Timeout)
         
-        # 创建直接连接的 WebClient，绕过所有代理
-        $handler = New-Object System.Net.Http.HttpClientHandler
-        $handler.UseProxy = $false
-        $handler.DefaultProxyCredentials = $null
-        $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromSeconds(2)
-        
-        # 发送请求
-        $task = $client.GetAsync("$baseUrl/rooms")
-        $task.Wait()
-        $response = $task.Result
-        
-        # 检查响应状态
-        if ($response.IsSuccessStatusCode) {
-            Write-Host "服务器连接正常，状态码: $($response.StatusCode)" -ForegroundColor Green
-            $client.Dispose()
+        if ($wait) {
+            Write-Host "TCP连接成功!" -ForegroundColor Green
+            $tcpClient.EndConnect($asyncResult)
+            $tcpClient.Close()
             return $true
         } else {
-            Write-Host "服务器返回错误状态码: $($response.StatusCode)" -ForegroundColor Yellow
-            $client.Dispose()
-            
-            if ($RetryCount -lt $maxRetries) {
-                Write-Host "将在 3 秒后重试 (尝试 $($RetryCount + 1)/$maxRetries)..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 3
-                return Test-ServerConnection -RetryCount ($RetryCount + 1)
-            }
+            Write-Host "TCP连接失败(超时)!" -ForegroundColor Red
             return $false
         }
-    } 
-    catch {
-        if ($RetryCount -lt $maxRetries) {
-            Write-Host "服务器连接失败: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "将在 3 秒后重试 (尝试 $($RetryCount + 1)/$maxRetries)..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 3
-            return Test-ServerConnection -RetryCount ($RetryCount + 1)
-        }
-        Write-Host "服务器连接失败: $($_.Exception.Message)" -ForegroundColor Red
+    } catch {
+        Write-Host "TCP连接错误: $_" -ForegroundColor Red
         return $false
-    }
-    finally {
-        $ProgressPreference = 'Continue'  # 恢复进度条设置
     }
 }
 
-# 通用的 API 调用函数 - 直接连接版本
-function Invoke-DirectApiRequest {
+# HTTP服务器测试函数
+function Test-ApiConnection {
+    param (
+        [string]$Endpoint = "/test/ping",
+        [int]$RetryCount = 3,
+        [int]$RetryDelay = 2
+    )
+    
+    Write-Host "测试API服务器连通性..." -ForegroundColor Yellow
+    $uri = "$baseUrl$Endpoint"
+    
+    for ($retry = 0; $retry -lt $RetryCount; $retry++) {
+        if ($retry -gt 0) {
+            Write-Host "尝试 #$($retry+1) (等待 ${RetryDelay}秒)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $RetryDelay
+        }
+        
+        try {
+            # 创建直接连接的客户端以绕过代理
+            $handler = New-Object System.Net.Http.HttpClientHandler
+            $handler.UseProxy = $false
+            $client = New-Object System.Net.Http.HttpClient($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(5)
+            
+            # 尝试简单的GET请求
+            $task = $client.GetAsync($uri)
+            $task.Wait()
+            $response = $task.Result
+            
+            if ($response.IsSuccessStatusCode) {
+                $content = $response.Content.ReadAsStringAsync().Result
+                Write-Host "API服务器响应正常! 状态码: $($response.StatusCode)" -ForegroundColor Green
+                Write-Host "响应内容: $content" -ForegroundColor Green
+                $client.Dispose()
+                return $true
+            } else {
+                Write-Host "API服务器返回错误状态码: $($response.StatusCode)" -ForegroundColor Yellow
+                $client.Dispose()
+            }
+        } catch {
+            Write-Host "API连接错误: $_" -ForegroundColor Red
+        }
+    }
+    
+    Write-Host "无法连接到API服务器，请检查服务是否运行！" -ForegroundColor Red
+    return $false
+}
+
+# 通用的 API 调用函数
+function Invoke-ApiRequest {
     param (
         [string]$Method,
         [string]$Endpoint,
         [object]$Body = $null,
         [string]$TestName,
-        [switch]$SkipOnFailure = $false
+        [int]$RetryCount = 2,
+        [switch]$SkipOnFailure
     )
     
     $uri = "$baseUrl$Endpoint"
-    $headers = @{
-        "Content-Type" = "application/json"
-        "Accept" = "application/json"
-        "X-Test-Name" = $TestName
-    }
     
-    Write-Host "`n执行测试: $TestName" -ForegroundColor Cyan
+    Write-Host "执行测试: $TestName" -ForegroundColor Cyan
     Write-Host "$Method $uri" -ForegroundColor Gray
     
-    try {
-        # 创建直接连接的 HttpClient
-        $handler = New-Object System.Net.Http.HttpClientHandler
-        $handler.UseProxy = $false
-        $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromSeconds($connectionTimeoutSec)
-        
-        # 添加请求头
-        foreach ($key in $headers.Keys) {
-            $client.DefaultRequestHeaders.Add($key, $headers[$key])
-        }
-        
-        # 准备请求
-        $request = $null
-        $content = $null
-        
-        if ($Body -and $Method -ne "GET") {
-            $jsonBody = $Body | ConvertTo-Json -Depth 10
-            Write-Host "请求体: $jsonBody" -ForegroundColor Gray
-            $content = New-Object System.Net.Http.StringContent($jsonBody, [System.Text.Encoding]::UTF8, "application/json")
-        }
-        
-        # 执行请求
-        $response = $null
-        switch ($Method) {
-            "GET" { 
-                $task = $client.GetAsync($uri)
-                $task.Wait()
-                $response = $task.Result
-            }
-            "POST" { 
-                $task = $client.PostAsync($uri, $content)
-                $task.Wait()
-                $response = $task.Result
-            }
-            "PUT" { 
-                $task = $client.PutAsync($uri, $content)
-                $task.Wait()
-                $response = $task.Result
-            }
-            "PATCH" {
-                # HttpClient 没有 PatchAsync 方法，需要创建自定义请求
-                $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Patch, $uri)
-                if ($content) { $request.Content = $content }
-                $task = $client.SendAsync($request)
-                $task.Wait()
-                $response = $task.Result
-            }
-            "DELETE" { 
-                $task = $client.DeleteAsync($uri)
-                $task.Wait()
-                $response = $task.Result
-            }
-            default { throw "不支持的 HTTP 方法: $Method" }
-        }
-        
-        # 处理响应
-        if ($response.IsSuccessStatusCode) {
-            $responseContent = $response.Content.ReadAsStringAsync().Result
-            $result = $responseContent | ConvertFrom-Json
-            
-            Write-Host "状态: 成功 (状态码: $($response.StatusCode))" -ForegroundColor Green
-            $responseContent | Out-File -FilePath "$outputFolder/$TestName.json" -Encoding utf8
-            Write-Host "结果已保存至: $outputFolder/$TestName.json" -ForegroundColor Gray
-            
-            # 释放资源
-            if ($request) { $request.Dispose() }
-            if ($content) { $content.Dispose() }
-            $response.Dispose()
-            $client.Dispose()
-            
-            return $result
-        } else {
-            $errorContent = $response.Content.ReadAsStringAsync().Result
-            $statusCode = [int]$response.StatusCode
-            
-            Write-Host "状态: 失败 (状态码: $statusCode)" -ForegroundColor Red
-            Write-Host "错误: $errorContent" -ForegroundColor Red
-            
-            # 保存错误信息
-            @{
-                StatusCode = $statusCode
-                Error = $errorContent
-                Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            } | ConvertTo-Json | Out-File -FilePath "$outputFolder/$TestName-error.json" -Encoding utf8
-            
-            # 释放资源
-            if ($request) { $request.Dispose() }
-            if ($content) { $content.Dispose() }
-            $response.Dispose()
-            $client.Dispose()
-            
-            if ($SkipOnFailure) {
-                Write-Host "测试标记为 SkipOnFailure，继续执行后续测试..." -ForegroundColor Yellow
-                return $null
+    # 尝试多种请求方式
+    for ($attempt = 0; $attempt -le $RetryCount; $attempt++) {
+        try {
+            if ($attempt -eq 0) {
+                # 尝试 HttpClient (更可靠)
+                $result = Invoke-HttpClientRequest -Method $Method -Uri $uri -Body $Body
+            } elseif ($attempt -eq 1) {
+                # 尝试 System.Net.WebClient
+                $result = Invoke-WebClientRequest -Method $Method -Uri $uri -Body $Body
             } else {
-                throw "API 测试失败: $errorContent (状态码: $statusCode)"
+                # 尝试 curl 命令
+                $result = Invoke-CurlRequest -Method $Method -Uri $uri -Body $Body
             }
+            
+            if ($result) {
+                Write-Host "状态: 成功" -ForegroundColor Green
+                # 确保结果是字符串格式
+                $resultStr = if ($result -is [string]) { $result } else { $result | ConvertTo-Json -Depth 10 }
+                $resultStr | Out-File -FilePath "$outputFolder/$TestName.json" -Encoding utf8
+                Write-Host "响应内容:" -ForegroundColor Green
+                Write-Host $resultStr
+                try {
+                    if ($result -is [string]) {
+                        return $result | ConvertFrom-Json
+                    } else {
+                        return $result
+                    }
+                } catch {
+                    return $result
+                }
+            }
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "尝试 #$($attempt+1) 失败: $errorMsg" -ForegroundColor Red
         }
     }
-    catch {
-        $errorMessage = $_.Exception.Message
-        Write-Host "请求失败: $errorMessage" -ForegroundColor Red
-        
+    
+    Write-Host "状态: 所有尝试均失败" -ForegroundColor Red
+    
+    if ($SkipOnFailure) {
+        Write-Host "跳过失败的测试: $TestName" -ForegroundColor Yellow
+    } else {
+        Write-Host "错误: 无法连接到API端点" -ForegroundColor Red
         # 保存错误信息
         @{
-            Error = $errorMessage
-            Exception = $_.Exception.GetType().Name
-            Time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            StackTrace = $_.ScriptStackTrace
-        } | ConvertTo-Json | Out-File -FilePath "$outputFolder/$TestName-error.json" -Encoding utf8
-        
-        if ($SkipOnFailure) {
-            Write-Host "测试标记为 SkipOnFailure，继续执行后续测试..." -ForegroundColor Yellow
-            return $null
+            Error = "无法连接到API端点"
+            Method = $Method
+            Endpoint = $Endpoint
+            Time = Get-Date
+        } | ConvertTo-Json | Out-File -FilePath "$outputFolder/$TestName-error.json"
+    }
+    
+    return $null
+}
+
+function Invoke-HttpClientRequest {
+    param (
+        [string]$Method,
+        [string]$Uri,
+        [object]$Body = $null
+    )
+    
+    Write-Host "使用 HttpClient 发送请求 (无代理)..." -ForegroundColor Gray
+    
+    # 创建自定义Http客户端以绕过代理
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseProxy = $false
+    $handler.ServerCertificateCustomValidationCallback = {$true}
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
+    
+    $client.DefaultRequestHeaders.Accept.Add("application/json")
+    
+    try {
+        if ($Method -eq "GET") {
+            $task = $client.GetStringAsync($Uri)
+            $task.Wait()
+            return $task.Result
         } else {
-            throw "API 请求失败: $errorMessage"
+            $content = $null
+            if ($Body) {
+                $jsonBody = $Body | ConvertTo-Json -Depth 10
+                $content = New-Object System.Net.Http.StringContent($jsonBody, [System.Text.Encoding]::UTF8, "application/json")
+            } else {
+                $content = New-Object System.Net.Http.StringContent("", [System.Text.Encoding]::UTF8, "application/json")
+            }
+            
+            $response = $null
+            $task = $null
+            
+            switch ($Method) {
+                "POST" { 
+                    $task = $client.PostAsync($Uri, $content)
+                }
+                "PUT" { 
+                    $task = $client.PutAsync($Uri, $content)
+                }
+                "DELETE" { 
+                    $task = $client.DeleteAsync($Uri)
+                }
+                "PATCH" { 
+                    $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Patch, $Uri)
+                    if ($content) { $request.Content = $content }
+                    $task = $client.SendAsync($request)
+                }
+                default { 
+                    throw "不支持的HTTP方法: $Method" 
+                }
+            }
+            
+            $task.Wait()
+            $response = $task.Result
+            $response.EnsureSuccessStatusCode() | Out-Null
+            $readTask = $response.Content.ReadAsStringAsync()
+            $readTask.Wait()
+            return $readTask.Result
         }
+    } finally {
+        if ($null -ne $content) { $content.Dispose() }
+        if ($client) { $client.Dispose() }
     }
 }
 
-# 主函数 - 测试执行逻辑
-function Start-ApiTest {
-    # 应用代理绕过设置
-    $originalProxySettings = Set-ProxyBypass
+function Invoke-WebClientRequest {
+    param (
+        [string]$Method,
+        [string]$Uri,
+        [object]$Body = $null
+    )
+    
+    Write-Host "使用 WebClient 发送请求 (无代理)..." -ForegroundColor Gray
+    $webClient = New-Object System.Net.WebClient
+    
+    # 绕过代理设置
+    $webClient.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+    
+    $webClient.Headers.Add("Content-Type", "application/json")
+    $webClient.Headers.Add("Accept", "application/json")
     
     try {
-        Write-Host "=================== Room Booking API 测试 ===================" -ForegroundColor Yellow
-        Write-Host "API 根路径: $baseUrl" -ForegroundColor Yellow
-        Write-Host "测试结果目录: $outputFolder" -ForegroundColor Yellow
-        Write-Host "=======================================================" -ForegroundColor Yellow
-        Write-Host "检查服务器连接..."
+        if ($Method -eq "GET") {
+            return $webClient.DownloadString($Uri)
+        } else {
+            $jsonBody = if ($Body) { $Body | ConvertTo-Json -Depth 10 } else { "{}" }
+            return $webClient.UploadString($Uri, $Method, $jsonBody)
+        }
+    } finally {
+        $webClient.Dispose()
+    }
+}
+
+function Invoke-CurlRequest {
+    param (
+        [string]$Method,
+        [string]$Uri,
+        [object]$Body = $null
+    )
+    
+    Write-Host "使用 curl 发送请求..." -ForegroundColor Gray
+    $curlCommand = "curl -s -x """" -X $Method"  # -x "" 禁用代理
+    $curlCommand += " -H 'Content-Type: application/json'"
+    $curlCommand += " -H 'Accept: application/json'"
+    
+    if ($Body -and $Method -ne "GET") {
+        $jsonBody = $Body | ConvertTo-Json -Depth 10 -Compress
+        # 转义JSON以便在命令行中使用
+        $jsonBody = $jsonBody.Replace('"', '\"')
+        $curlCommand += " -d `"$jsonBody`""
+    }
+    
+    $curlCommand += " $Uri"
+    
+    try {
+        return Invoke-Expression $curlCommand
+    } catch {
+        Write-Host "Curl请求失败: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+function Run-ApiTests {
+    try {
+        Write-Host "`n====== Room Booking API 全面测试 ======" -ForegroundColor Magenta
+        Write-Host "开始时间: $(Get-Date)" -ForegroundColor Yellow
+        Write-Host "API基础URL: $baseUrl" -ForegroundColor Yellow
         
-        if (-not (Test-ServerConnection)) {
-            Write-Host "服务器连接失败，无法进行测试。请确保 Spring Boot 应用已启动。" -ForegroundColor Red
-            Write-Host "检查事项:" -ForegroundColor Yellow
-            Write-Host " 1. 确认后端应用运行在端口 8081" -ForegroundColor Yellow
-            Write-Host " 2. 检查防火墙设置是否阻止了本地连接" -ForegroundColor Yellow
-            Write-Host " 3. 尝试在浏览器中访问 http://127.0.0.1:8081/api/rooms 测试连通性" -ForegroundColor Yellow
+        # 诊断信息
+        Write-Host "`n=== 代理环境诊断 ===" -ForegroundColor Blue
+        Write-Host "HTTP_PROXY: [$env:HTTP_PROXY]" -ForegroundColor Gray
+        Write-Host "HTTPS_PROXY: [$env:HTTPS_PROXY]" -ForegroundColor Gray
+        Write-Host "NO_PROXY: [$env:NO_PROXY]" -ForegroundColor Gray
+        
+        # TCP连接测试
+        Write-Host "`n=== 第1步: 网络连接测试 ===" -ForegroundColor Blue
+        $tcpConnected = Test-TcpConnection -Uri "$baseUrl/rooms"
+        
+        if (-not $tcpConnected) {
+            Write-Host "TCP连接失败，请检查服务器是否运行及防火墙设置" -ForegroundColor Red
+            Write-Host "尝试API连接测试以进一步诊断..." -ForegroundColor Yellow
+        }
+        
+        # API可用性测试
+        $apiAvailable = Test-ApiConnection -Endpoint "/rooms"
+        if (-not $apiAvailable) {
+            Write-Host "API连接测试失败，尝试使用测试端点..." -ForegroundColor Yellow
+            $apiAvailable = Test-ApiConnection -Endpoint "/test/ping"
+        }
+        
+        if (-not $apiAvailable) {
+            Write-Host "无法连接到API服务器。请确保后端服务正在运行，并检查端口配置。" -ForegroundColor Red
+            Write-Host "检查提示:" -ForegroundColor Yellow
+            Write-Host " 1. Spring Boot应用是否已启动" -ForegroundColor Yellow
+            Write-Host " 2. 应用是否正在监听端口8080" -ForegroundColor Yellow
+            Write-Host " 3. 检查防火墙设置是否阻止了连接" -ForegroundColor Yellow
             return
         }
-
-        # 模块 1: 房间管理 API 测试
-        Write-Host "`n模块 1: 房间管理 API 测试" -ForegroundColor Magenta
-        $rooms = Invoke-DirectApiRequest -Method "GET" -Endpoint "/rooms" -TestName "get-all-rooms" -SkipOnFailure
-        $availableRooms = Invoke-DirectApiRequest -Method "GET" -Endpoint "/rooms/available" -TestName "get-available-rooms" -SkipOnFailure
+        
+        # ===== 房间管理模块测试 =====
+        Write-Host "`n=== 第2步: 房间管理模块测试 ===" -ForegroundColor Blue
+        
+        # 获取所有房间
+        $rooms = Invoke-ApiRequest -Method "GET" -Endpoint "/rooms" -TestName "get-all-rooms"
         
         if ($rooms -and $rooms.Count -gt 0) {
-            $roomId = $rooms[0].id
-            $room = Invoke-DirectApiRequest -Method "GET" -Endpoint "/rooms/$roomId" -TestName "get-room-by-id" -SkipOnFailure
+            Write-Host "成功获取房间列表，共 $($rooms.Count) 个房间" -ForegroundColor Green
             
-            # 测试按容量查询房间
-            Invoke-DirectApiRequest -Method "GET" -Endpoint "/rooms/capacity/10" -TestName "get-rooms-by-capacity" -SkipOnFailure
+            # 获取房间详情
+            $roomId = $rooms[0].id
+            Write-Host "使用第一个房间ID: $roomId 进行后续测试" -ForegroundColor Yellow
+            $room = Invoke-ApiRequest -Method "GET" -Endpoint "/rooms/$roomId" -TestName "get-room-by-id"
+            
+            # 获取可用房间
+            $availableRooms = Invoke-ApiRequest -Method "GET" -Endpoint "/rooms/available" -TestName "get-available-rooms"
+            
+            # 按容量筛选房间
+            $capacity = 10
+            $capacityRooms = Invoke-ApiRequest -Method "GET" -Endpoint "/rooms/capacity/$capacity" -TestName "get-rooms-by-capacity"
+            
+            # 创建新房间测试
+            $newRoom = @{
+                name = "测试会议室-$(Get-Random)"
+                location = "3楼东侧"
+                capacity = 15
+                facilities = "投影仪, 白板, 视频会议"
+                available = $true
+                imageUrl = "https://example.com/room/image.jpg"
+            }
+            
+            $createdRoom = Invoke-ApiRequest -Method "POST" -Endpoint "/rooms" -Body $newRoom -TestName "create-room"
+            
+            # 若创建成功，则更新房间
+            if ($createdRoom) {
+                $createdRoom.name = "已更新-$($createdRoom.name)"
+                $createdRoom.capacity = 20
+                $updatedRoom = Invoke-ApiRequest -Method "PUT" -Endpoint "/rooms/$($createdRoom.id)" -Body $createdRoom -TestName "update-room"
+                
+                # 删除测试房间
+                $deleteResult = Invoke-ApiRequest -Method "DELETE" -Endpoint "/rooms/$($createdRoom.id)" -TestName "delete-room"
+            }
+            
+            # 测试时间段可用房间查询
+            $now = Get-Date
+            $startTime = $now.AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss")
+            $endTime = $now.AddDays(1).AddHours(2).ToString("yyyy-MM-ddTHH:mm:ss")
+            $availableRoomsBetween = Invoke-ApiRequest -Method "GET" -Endpoint "/rooms/available-between?start=$startTime&end=$endTime" -TestName "get-available-rooms-between"
         } else {
-            Write-Host "跳过单个房间相关测试，未找到可用房间" -ForegroundColor Yellow
+            Write-Host "未能获取房间数据，跳过对应的测试" -ForegroundColor Yellow
         }
-
-        # 模块 2: 用户管理 API 测试
-        Write-Host "`n模块 2: 用户管理 API 测试" -ForegroundColor Magenta
-        $users = Invoke-DirectApiRequest -Method "GET" -Endpoint "/users" -TestName "get-all-users" -SkipOnFailure
+        
+        # ===== 用户管理模块测试 =====
+        Write-Host "`n=== 第3步: 用户管理模块测试 ===" -ForegroundColor Blue
+        
+        # 获取所有用户
+        $users = Invoke-ApiRequest -Method "GET" -Endpoint "/users" -TestName "get-all-users"
         
         if ($users -and $users.Count -gt 0) {
-            $userId = $users[0].id
-            Invoke-DirectApiRequest -Method "GET" -Endpoint "/users/$userId" -TestName "get-user-by-id" -SkipOnFailure
-        } else {
-            Write-Host "跳过单个用户相关测试，未找到用户" -ForegroundColor Yellow
-        }
-
-        # 其他模块测试代码保持不变...
-        # 模块 3: 预订管理 API 测试
-        Write-Host "`n模块 3: 预订管理 API 测试" -ForegroundColor Magenta
-        if ($rooms -and $rooms.Count -gt 0 -and $users -and $users.Count -gt 0) {
-            $roomId = $rooms[0].id
-            $userId = $users[0].id
+            Write-Host "成功获取用户列表，共 $($users.Count) 个用户" -ForegroundColor Green
             
-            $bookingData = @{
-                user = @{ id = $userId }
-                room = @{ id = $roomId }
-                startTime = (Get-Date).AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss")
-                endTime = (Get-Date).AddDays(1).AddHours(2).ToString("yyyy-MM-ddTHH:mm:ss")
-                conflictDetected = $false
-                status = "pending"  # 添加状态字段
+            # 获取用户详情
+            $userId = $users[0].id
+            Write-Host "使用第一个用户ID: $userId 进行后续测试" -ForegroundColor Yellow
+            $user = Invoke-ApiRequest -Method "GET" -Endpoint "/users/$userId" -TestName "get-user-by-id"
+            
+            # 如果用户有username属性，尝试通过用户名获取用户
+            if ($user -and $user.username) {
+                $userByUsername = Invoke-ApiRequest -Method "GET" -Endpoint "/users/username/$($user.username)" -TestName "get-user-by-username"
             }
             
-            $newBooking = Invoke-DirectApiRequest -Method "POST" -Endpoint "/bookings" -Body $bookingData -TestName "create-booking" -SkipOnFailure
+            # 创建新用户测试
+            $randomSuffix = Get-Random
+            $newUser = @{
+                username = "testuser$randomSuffix"
+                email = "testuser$randomSuffix@example.com"
+                firstName = "Test"
+                lastName = "User"
+                passwordHash = "password123" # 会在后端加密
+                role = @{ id = 2 } # 假设ID=2是普通用户角色
+            }
             
-            if ($newBooking) {
-                $bookingId = $newBooking.id
-                Invoke-DirectApiRequest -Method "GET" -Endpoint "/bookings" -TestName "get-all-bookings" -SkipOnFailure
-                Invoke-DirectApiRequest -Method "GET" -Endpoint "/bookings/$bookingId" -TestName "get-booking-by-id" -SkipOnFailure
-                Invoke-DirectApiRequest -Method "GET" -Endpoint "/bookings/user/$userId" -TestName "get-user-bookings" -SkipOnFailure
-                Invoke-DirectApiRequest -Method "GET" -Endpoint "/bookings/room/$roomId" -TestName "get-room-bookings" -SkipOnFailure
-                Invoke-DirectApiRequest -Method "PATCH" -Endpoint "/bookings/$bookingId/approve" -TestName "approve-booking" -SkipOnFailure
-                Invoke-DirectApiRequest -Method "PATCH" -Endpoint "/bookings/$bookingId/cancel" -TestName "cancel-booking" -SkipOnFailure
-            } else {
-                Write-Host "跳过预订相关测试，创建预订失败" -ForegroundColor Yellow
+            $createdUser = Invoke-ApiRequest -Method "POST" -Endpoint "/users" -Body $newUser -TestName "create-user"
+            
+            # 若创建成功，则更新用户
+            if ($createdUser) {
+                $createdUser.firstName = "Updated"
+                $createdUser.lastName = "TestUser"
+                $updatedUser = Invoke-ApiRequest -Method "PUT" -Endpoint "/users/$($createdUser.id)" -Body $createdUser -TestName "update-user"
+                
+                # 删除测试用户
+                $deleteResult = Invoke-ApiRequest -Method "DELETE" -Endpoint "/users/$($createdUser.id)" -TestName "delete-user"
             }
         } else {
-            Write-Host "跳过预订相关测试，未找到可用房间或用户" -ForegroundColor Yellow
+            Write-Host "未能获取用户数据，跳过对应的测试" -ForegroundColor Yellow
         }
-
-        # 模块 4: 角色与权限 API 测试
-        Write-Host "`n模块 4: 角色与权限 API 测试" -ForegroundColor Magenta
-        $roles = Invoke-DirectApiRequest -Method "GET" -Endpoint "/roles" -TestName "get-all-roles" -SkipOnFailure
-        $permissions = Invoke-DirectApiRequest -Method "GET" -Endpoint "/permissions" -TestName "get-all-permissions" -SkipOnFailure
+        
+        # ===== 角色和权限模块测试 =====
+        Write-Host "`n=== 第4步: 角色和权限模块测试 ===" -ForegroundColor Blue
+        
+        # 获取所有角色
+        $roles = Invoke-ApiRequest -Method "GET" -Endpoint "/roles" -TestName "get-all-roles"
+        
+        # 获取所有权限
+        $permissions = Invoke-ApiRequest -Method "GET" -Endpoint "/permissions" -TestName "get-all-permissions"
         
         if ($roles -and $roles.Count -gt 0) {
+            # 获取角色详情
             $roleId = $roles[0].id
-            Invoke-DirectApiRequest -Method "GET" -Endpoint "/roles/$roleId" -TestName "get-role-by-id" -SkipOnFailure
+            $role = Invoke-ApiRequest -Method "GET" -Endpoint "/roles/$roleId" -TestName "get-role-by-id"
+            
+            # 如果角色有name属性，尝试通过名称获取角色
+            if ($role -and $role.name) {
+                $roleByName = Invoke-ApiRequest -Method "GET" -Endpoint "/roles/name/$($role.name)" -TestName "get-role-by-name"
+            }
         }
         
         if ($permissions -and $permissions.Count -gt 0) {
+            # 获取权限详情
             $permissionId = $permissions[0].id
-            Invoke-DirectApiRequest -Method "GET" -Endpoint "/permissions/$permissionId" -TestName "get-permission-by-id" -SkipOnFailure
+            $permission = Invoke-ApiRequest -Method "GET" -Endpoint "/permissions/$permissionId" -TestName "get-permission-by-id"
+            
+            # 如果权限有name属性，尝试通过名称获取权限
+            if ($permission -and $permission.name) {
+                $permissionByName = Invoke-ApiRequest -Method "GET" -Endpoint "/permissions/name/$($permission.name)" -TestName "get-permission-by-name"
+            }
         }
         
-        # 模块 5: 通知 API 测试
-        Write-Host "`n模块 5: 通知 API 测试" -ForegroundColor Magenta
-        Invoke-DirectApiRequest -Method "GET" -Endpoint "/notifications" -TestName "get-all-notifications" -SkipOnFailure
-        Invoke-DirectApiRequest -Method "GET" -Endpoint "/notifications/pending" -TestName "get-pending-notifications" -SkipOnFailure
+        # ===== 预订管理模块测试 =====
+        Write-Host "`n=== 第5步: 预订管理模块测试 ===" -ForegroundColor Blue
         
-        Write-Host "`n================== API 测试完成 ===================" -ForegroundColor Green
-        Write-Host "测试结果已保存在 $outputFolder 目录中" -ForegroundColor Green
+        # 获取所有预订
+        $bookings = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings" -TestName "get-all-bookings"
+        
+        if ($rooms -and $rooms.Count -gt 0 -and $users -and $users.Count -gt 0) {
+            # 创建新预订
+            $roomId = $rooms[0].id
+            $userId = $users[0].id
+            
+            $startTime = (Get-Date).AddDays(1).ToString("yyyy-MM-ddTHH:mm:ss")
+            $endTime = (Get-Date).AddDays(1).AddHours(2).ToString("yyyy-MM-ddTHH:mm:ss")
+            
+            $newBooking = @{
+                user = @{ id = $userId }
+                room = @{ id = $roomId }
+                startTime = $startTime
+                endTime = $endTime
+                status = "pending"
+                conflictDetected = $false
+            }
+            
+            $createdBooking = Invoke-ApiRequest -Method "POST" -Endpoint "/bookings" -Body $newBooking -TestName "create-booking"
+            
+            if ($createdBooking) {
+                # 获取预订详情
+                $bookingId = $createdBooking.id
+                $booking = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings/$bookingId" -TestName "get-booking-by-id"
+                
+                # 更新预订
+                if ($booking) {
+                    $booking.startTime = (Get-Date).AddDays(2).ToString("yyyy-MM-ddTHH:mm:ss")
+                    $booking.endTime = (Get-Date).AddDays(2).AddHours(3).ToString("yyyy-MM-ddTHH:mm:ss")
+                    $updatedBooking = Invoke-ApiRequest -Method "PUT" -Endpoint "/bookings/$bookingId" -Body $booking -TestName "update-booking"
+                }
+                
+                # 获取用户的预订
+                $userBookings = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings/user/$userId" -TestName "get-bookings-by-user"
+                
+                # 获取房间的预订
+                $roomBookings = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings/room/$roomId" -TestName "get-bookings-by-room"
+                
+                # 获取状态的预订
+                $pendingBookings = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings/status/pending" -TestName "get-bookings-by-status"
+                
+                # 获取用户未来的预订
+                $futureBokings = Invoke-ApiRequest -Method "GET" -Endpoint "/bookings/user/$userId/future" -TestName "get-user-future-bookings"
+                
+                # 批准预订
+                $approveResult = Invoke-ApiRequest -Method "PATCH" -Endpoint "/bookings/$bookingId/approve" -TestName "approve-booking"
+                
+                # 取消预订
+                $cancelResult = Invoke-ApiRequest -Method "PATCH" -Endpoint "/bookings/$bookingId/cancel" -TestName "cancel-booking"
+                
+                # 删除预订
+                $deleteResult = Invoke-ApiRequest -Method "DELETE" -Endpoint "/bookings/$bookingId" -TestName "delete-booking"
+            }
+        } else {
+            Write-Host "缺少必要的房间或用户数据，跳过预订模块测试" -ForegroundColor Yellow
+        }
+        
+        # ===== 通知模块测试 =====
+        Write-Host "`n=== 第6步: 通知模块测试 ===" -ForegroundColor Blue
+        
+        # 获取所有通知
+        $notifications = Invoke-ApiRequest -Method "GET" -Endpoint "/notifications" -TestName "get-all-notifications"
+        
+        if ($notifications -and $notifications.Count -gt 0) {
+            # 获取通知详情
+            $notificationId = $notifications[0].id
+            $notification = Invoke-ApiRequest -Method "GET" -Endpoint "/notifications/$notificationId" -TestName "get-notification-by-id"
+            
+            # 如果通知有关联的预订，查询该预订的所有通知
+            if ($notification -and $notification.booking -and $notification.booking.id) {
+                $bookingId = $notification.booking.id
+                $bookingNotifications = Invoke-ApiRequest -Method "GET" -Endpoint "/notifications/booking/$bookingId" -TestName "get-notifications-by-booking"
+            }
+            
+            # 获取待处理的通知
+            $pendingNotifications = Invoke-ApiRequest -Method "GET" -Endpoint "/notifications/pending" -TestName "get-pending-notifications"
+            
+            # 标记通知为已发送
+            $markSentResult = Invoke-ApiRequest -Method "PATCH" -Endpoint "/notifications/$notificationId/mark-sent" -TestName "mark-notification-as-sent"
+            
+            # 标记通知为发送失败
+            $markFailedResult = Invoke-ApiRequest -Method "PATCH" -Endpoint "/notifications/$notificationId/mark-failed" -TestName "mark-notification-as-failed"
+            
+            # 删除通知
+            $deleteResult = Invoke-ApiRequest -Method "DELETE" -Endpoint "/notifications/$notificationId" -TestName "delete-notification"
+        } else {
+            Write-Host "未能获取通知数据，跳过通知模块详细测试" -ForegroundColor Yellow
+        }
+        
+        Write-Host "`n====== 测试完成 ======" -ForegroundColor Magenta
+        Write-Host "结束时间: $(Get-Date)" -ForegroundColor Yellow
+        Write-Host "测试结果保存在 $outputFolder 目录中" -ForegroundColor Green
     }
     catch {
-        Write-Host "测试过程中发生错误: $_" -ForegroundColor Red
+        Write-Host "`n[错误] 测试过程中发生异常:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        Write-Host $_.ScriptStackTrace -ForegroundColor Red
     }
     finally {
-        # 恢复原始代理设置
-        Restore-ProxySettings -OriginalSettings $originalProxySettings
+        # 始终恢复代理设置
+        Restore-SystemProxy
     }
 }
 
 # 执行测试
-Start-ApiTest
+Run-ApiTests

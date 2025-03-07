@@ -1,7 +1,6 @@
 package com.example.roombooking.entity;
 
-import com.fasterxml.jackson.annotation.JsonBackReference;
-import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -22,7 +21,6 @@ public class Booking {
     
     @ManyToOne
     @JoinColumn(name = "room_id")
-    @JsonManagedReference
     private Room room;
     
     @Column(name = "start_time")
@@ -38,7 +36,7 @@ public class Booking {
     private Boolean conflictDetected;
     
     @OneToMany(mappedBy = "booking")
-    @JsonManagedReference
+    @JsonIgnore
     private Set<Notification> notifications;
     
     public enum BookingStatus {
